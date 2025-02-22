@@ -28,4 +28,4 @@ anaconda:
         done
 
 debug:
-	@conda debug . --output /home/marco.meyer/.conda/conda-bld/debug_1740216566494/linux-64/framel-8.48.4-py310h3fd9d12_0.tar.bz2
+	@conda debug .
