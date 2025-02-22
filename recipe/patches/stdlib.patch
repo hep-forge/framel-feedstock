@@ -1,0 +1,23 @@
+diff --git a/src/FrameL.h b/src/FrameL.h
+index df9fdb3..19ba9cf 100644
+--- a/src/FrameL.h
++++ b/src/FrameL.h
+@@ -11,8 +11,7 @@
+ #define FRPI              3.14159265358979
+ #define FRTWOPI           6.2831853071795864769
+ 
+-
+-
++#include <stdlib.h>
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -21,7 +20,6 @@ extern "C" {
+ #include <time.h>
+ #include <string.h>
+ #include <stdio.h>
+-#include <stdlib.h>
+ #include <limits.h>
+ #include "FrIO.h"
+ 
+-- 
