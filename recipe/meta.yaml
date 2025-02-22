@@ -17,8 +17,11 @@ source:
   sha256: {{ versions.get(version) }}
   {% endif %}
 
+build:
+  number: 0
+
 patches:
-    - patches/stdlib.patch
+  - patches/stdlib.patch
 
 requirements:
   build:
