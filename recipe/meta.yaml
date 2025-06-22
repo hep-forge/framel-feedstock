@@ -1,5 +1,5 @@
 {% set versions = {
-    "8.48.4": "0607181a5494ec4962b0ed8f8901e02fce85598274740730fef9889ae989f908"
+    "v3r72": "594d1f0883533a4404e6e45acf01a86e93afa86a6d0110b8697732163c7a8641"
 } %}
 
 
@@ -16,23 +16,14 @@ source:
   {% if versions.get(version, None) %}
   sha256: {{ versions.get(version) }}
   {% endif %}
-  patches:
-    - patches/stdlib.patch
 
 requirements:
   build:
     - {{ compiler('cxx') }}
     - {{ compiler('c') }}
-    - python
 
     - make
     - cmake
-
-  host:
-    - python
-
-  run:
-    - python
 
 about:
   home: "https://git.ligo.org/virgo/virgoapp/Fr"
