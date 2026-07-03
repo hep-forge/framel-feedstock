@@ -16,7 +16,7 @@ Frame library
 | Architecture | Latest published |
 |--------------|------------------|
 | linux-amd64 (`linux-64`) | ✅ `8.48.4` |
-| linux-arm64 (`linux-aarch64`) | ❌ not published |
+| linux-arm64 (`linux-aarch64`) | ✅ `8.48.4` |
 
 _As of the last feedstock render; the badges above are live._
 
