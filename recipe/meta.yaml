@@ -18,7 +18,10 @@ source:
   sha256: {{ versions.get(version) }}
   {% endif %}
   patches:
+    # upstream since 8.50.3
+    {% if version == "8.48.4" %}
     - patches/stdlib.patch
+    {% endif %}
 
 requirements:
   build:
