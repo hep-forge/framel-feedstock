@@ -1,50 +1,76 @@
 {% set versions = {
-    "8.50.3": "f9ae4d6affc43835236abf7c794ae4d6f48ecd5b61db7d5d622d235a8e1ad2bf",
-    "8.48.4": "0607181a5494ec4962b0ed8f8901e02fce85598274740730fef9889ae989f908"
+    "8.50.3": "f9ae4d6affc43835236abf7c794ae4d6f48ecd5b61db7d5d622d235a8e1ad2bf"
 } %}
-
 
 {% set version = environ.get('COMMIT_VERSION', None) %}
 {% set version = version or versions.keys()|first %}
 {% set version = version|string %}
+
+# "framel" here is the Virgo frame stack in one install:
+#   libframel, python-framel     the Frame Library and its Python module
+#   frv, fd                      Virgo's Frv (signal processing on frames)
+#                                and Fd (frame distribution), linux-64 only
+#                                because conda-forge builds them only there
+#   FrDump, FrCopy, ... tools    compiled here
+# The library and the Virgo packages are conda-forge's; only the Fr tools
+# are built, against conda-forge's libframel of the same version. That is
+# what conda-forge's own "framel" package holds, which this one shadows
+# under strict channel priority (same name), so it must provide them.
+# Plain "#" comments only: the publish workflow's version trimming strips
+# {% %}/{{ }} and yaml-loads the rest, so a Jinja comment block breaks it.
 
 package:
   name: {{ environ.get('ANACONDA_PACKAGE', "framel")|string|lower }}
   version: {{ environ.get('ANACONDA_VERSION', version)|replace("-", ".") }}
 
 source:
-  url: "https://git.ligo.org/virgo/virgoapp/Fr/-/archive/{{  version }}/Fr-{{ version }}.tar.gz"
+  url: "https://git.ligo.org/virgo/virgoapp/Fr/-/archive/{{ version }}/Fr-{{ version }}.tar.gz"
   {% if versions.get(version, None) %}
   sha256: {{ versions.get(version) }}
   {% endif %}
-  patches:
-    # upstream since 8.50.3
-    {% if version == "8.48.4" %}
-    - patches/stdlib.patch
-    {% endif %}
+
+build:
+  number: 1   # above the 8.50.3 build 0 that compiled its own libframel
 
 requirements:
   build:
-    - {{ compiler('cxx') }}
     - {{ compiler('c') }}
     - {{ stdlib('c') }}
-    - python
-
-    - make
-    - cmake
-
   host:
-    - python
-
+    - libframel {{ version }}.*
   run:
-    - python
+    - libframel {{ version }}.*
+    - python-framel {{ version }}.*
+    - frv   # [linux64]
+    - fd    # [linux64]
+
+test:
+  source_files:
+    - data/test.gwf
+  commands:
+    {% for app in ["FrChannels", "FrCheck", "FrCopy", "FrDiff", "FrDump", "FrTrend", "FrameDataDump"] %}
+    - test -x "${PREFIX}/bin/{{ app }}"
+    {% endfor %}
+    - FrCheck -i data/test.gwf
+    - FrDump -i data/test.gwf -d 1
+    - pkg-config --exact-version "{{ version }}" framel
+    - python -c "import framel"
+    - test -f "${PREFIX}/include/frv/Frv.h"   # [linux64]
+    - test -f "${PREFIX}/include/fd/Fd.h"     # [linux64]
+  requires:
+    - pkg-config
 
 about:
   home: "https://git.ligo.org/virgo/virgoapp/Fr"
-  license: "GPL-3.0"
-  summary: "Frame library"
+  license: "LGPL-2.1-or-later"
+  summary: "Virgo Frame Library with its tools, Python module, Frv and Fd"
   description: |
-    Frame library
+    The Frame Library (FrameL) for the gravitational-wave frame format,
+    with its command-line tools (FrDump, FrCopy, FrCheck, ...), its Python
+    module, and Virgo's Frv and Fd (linux-64). The library and the Virgo
+    packages come from conda-forge (libframel, python-framel, frv, fd);
+    the tools are compiled here against that libframel.
+  dev_url: "https://git.ligo.org/virgo/virgoapp"
 
 extra:
   recipe-maintainers:
