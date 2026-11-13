@@ -9,7 +9,7 @@ Feedstock for [framel](https://git.ligo.org/virgo/virgoapp/Fr) — part of [hep-
 Builds linux-amd64 + linux-arm64 in one matrix workflow and uploads to the
 [hep-forge](https://anaconda.org/hep-forge) Anaconda channel.
 
-Frame library
+Virgo frame stack: Frame Library with tools and Python, Frv and Fd
 
 ## Architectures
 
