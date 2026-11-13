@@ -1,0 +1,273 @@
+diff --git a/meson.build b/meson.build
+index 8a18a05..fc182de 100644
+--- a/meson.build
++++ b/meson.build
+@@ -5,7 +5,7 @@ pkg = import ('pkgconfig')
+ cc = meson.get_compiler ('c')
+ 
+ libm = cc.find_library ('m')
+-librt = cc.find_library ('rt')
++librt = cc.find_library ('rt', required: host_machine.system() != 'darwin')
+ 
+ fd_dependencies = [
+ 	dependency ('frv'),
+@@ -13,4 +13,9 @@ fd_dependencies = [
+ 	dependency ('threads')
+ ]
+ 
++if host_machine.system() == 'darwin'
++	# FdIO.h's _XOPEN_SOURCE 500 hides snprintf, strdup and getline on Darwin
++	add_project_arguments('-D_DARWIN_C_SOURCE', language: 'c')
++endif
++
+ subdir ('src')
+diff --git a/src/FdCm.c b/src/FdCm.c
+index 53b42e3..1dfb583 100644
+--- a/src/FdCm.c
++++ b/src/FdCm.c
+@@ -9,6 +9,7 @@
+ #include <pthread.h>
+ #include <sys/types.h>
+ #include <sys/syscall.h> 
++#include "FdOs.h"
+ 
+ typedef struct FdICm          FdICm;
+ typedef struct FdOCmServer    FdOCmServer;
+@@ -39,7 +40,7 @@ struct FdICm                 /* Use for input frame from Cm                  */
+   int       DsiFileLength; /* duration of remote data to be read            */ 
+   FdIDir*   iDir;          /* link list of /dev/shm directories if used     */
+   pthread_t    thrdId;     /* thread info                             */
+-  sem_t        semNewData; /* tell is new data should be processed    */
++  CfgSem_t     semNewData; /* tell is new data should be processed    */
+   pthread_mutex_t lock;    /* mutex to control the frame passing      */
+   FdAction* action;        /* action for this structure                     */
+ };
+@@ -168,19 +169,14 @@ int FdICmAdd(FdAction** root, int frameListSize, int maxSources)
+   if(FdICmThread == FR_NO) return(CFG_OK);
+ 
+   /*---------------------------------------------------initialize semaphore---*/
+-  sem_init(&FdIn->semNewData,  0, 0); 
++  CfgSemInit(&FdIn->semNewData, 0); 
+ 
+  /*-----------------------------------------------------------create thread---*/
+   int irc = pthread_create(&(FdIn->thrdId), NULL, 
+ 			(void *(*)(void *))FdICmThreadMain,  (void *)FdIn);
+   if(irc == -1) CfgMsgAddFatal("FdTICmThreadMain creation failed");
+ 
+-  /*------------put the thread on the same CPU to avoid cache inefficiency---*/
+-  pthread_t myId;
+-  cpu_set_t cpuset;
+-  myId = pthread_self();   //----------get thread id for the main---
+-  pthread_getaffinity_np(myId,         sizeof(cpu_set_t), &cpuset);
+-  pthread_setaffinity_np(FdIn->thrdId, sizeof(cpu_set_t), &cpuset);
++  FdThreadCopyAffinity(FdIn->thrdId);
+ 
+   return(CFG_OK);
+ }
+@@ -281,7 +277,7 @@ CmMessageStatus FdICmHandlerFrame(CmMessage message,
+   FdIn->iFrBufW ++;
+ 
+   /*---------------wake up the FrameReadFromBuf thread if threading is used----*/
+-  if(FdICmThread == FR_YES) sem_post(&FdIn->semNewData);
++  if(FdICmThread == FR_YES) sem_post(CfgSemPtr(&FdIn->semNewData));
+ 
+   return(CmMessageBreak);
+ }
+@@ -293,7 +289,7 @@ void FdICmThreadMain(FdICm* iCm)
+   int nFrames = 0;
+ 
+   int compress = FdIOGetCompressIn();
+-  int tid = syscall(__NR_gettid);
++  int tid = FdGetTid();
+     
+   CfgMsgAddInfo("Start FdTICmThreadMain; tid=%d pid=%d", tid, getpid());
+ 
+@@ -305,7 +301,7 @@ void FdICmThreadMain(FdICm* iCm)
+   while (1) {
+ 
+     /*----------------------------------------------wait for the next frame---*/
+-    sem_wait(&iCm->semNewData);
++    sem_wait(CfgSemPtr(&iCm->semNewData));
+ 
+     /*-----------------------get the last buffer and read the frame from it---*/
+ /*    pthread_mutex_lock (&iCm->lock);  --- this line may not be needed */
+@@ -345,7 +341,7 @@ void FdICmThreadMain(FdICm* iCm)
+   /*-------------------------------- Get thread clock Id and then clock time---*/
+   struct timespec currTime;
+   clockid_t threadClockId;
+-  pthread_getcpuclockid(iCm->thrdId, &threadClockId);
++  FdThreadCpuClock(iCm->thrdId, &threadClockId);
+   clock_gettime(threadClockId, &currTime);
+   double totTime = currTime.tv_sec + 1.e-9*currTime.tv_nsec;
+ 
+diff --git a/src/FdIDir.c b/src/FdIDir.c
+index 8a3dabb..d77bc21 100644
+--- a/src/FdIDir.c
++++ b/src/FdIDir.c
+@@ -2,6 +2,11 @@
+ #include <sys/stat.h>
+ #include <errno.h>
+ #include "FdIDir.h"
++#ifdef __APPLE__
++#define FD_MTIME_NSEC(sb) ((sb).st_mtimespec.tv_nsec)
++#else
++#define FD_MTIME_NSEC(sb) ((sb).st_mtimensec)
++#endif
+ 
+ /*---------------------------------------------------------------------------*/
+ /* The logic of this code works with integer frame duration and frame
+@@ -239,11 +244,11 @@ FrameH *FdIDirProcessOne(FdIDir* iDir, int dbgLvl)
+   /*-----------------------------check that the directory has been updated----*/
+   stat(iDir->dirName, &sb);
+   if(iDir->lastMtimeS == sb.st_mtime &&
+-     iDir->lastMtimeN == sb.st_mtimensec &&
++     iDir->lastMtimeN == FD_MTIME_NSEC(sb) &&
+      iDir->lastRead == FR_NO) return(NULL); /*------nothing new---*/
+ 
+   iDir->lastMtimeS = sb.st_mtime;
+-  iDir->lastMtimeN = sb.st_mtimensec;
++  iDir->lastMtimeN = FD_MTIME_NSEC(sb);
+   iDir->lastRead = FR_NO;
+ 
+   /*-------------------------------------for debuging, list available files---*/
+diff --git a/src/FdOs.h b/src/FdOs.h
+new file mode 100644
+index 0000000..e2b0897
+--- /dev/null
++++ b/src/FdOs.h
+@@ -0,0 +1,32 @@
++/* FdOs.h: what Fd's threads need from the OS (private, not installed) */
++#ifndef FdOs_h
++#define FdOs_h
++
++#include <pthread.h>
++#include <unistd.h>
++#include <sys/syscall.h>
++#include <CfgQueue.h>
++#ifdef __APPLE__
++#include <stdint.h>
++#include <time.h>
++/* macOS: no gettid syscall, no pthread_getcpuclockid, no CPU affinity */
++static int FdGetTid(void) {
++  uint64_t tid = 0;
++  pthread_threadid_np(NULL, &tid);
++  return((int)tid);
++}
++/* only called by the thread whose CPU time it reads */
++#define FdThreadCpuClock(thrdId, clockId) (*(clockId) = CLOCK_THREAD_CPUTIME_ID)
++#define FdThreadCopyAffinity(thrdId)
++#else
++static int FdGetTid(void) { return((int)syscall(__NR_gettid)); }
++#define FdThreadCpuClock(thrdId, clockId) pthread_getcpuclockid((thrdId), (clockId))
++/*------------put the thread on the same CPU to avoid cache inefficiency---*/
++#define FdThreadCopyAffinity(thrdId) do {                              \
++    cpu_set_t cpuset;                                                  \
++    pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);\
++    pthread_setaffinity_np((thrdId),       sizeof(cpu_set_t), &cpuset);\
++  } while(0)
++#endif
++
++#endif /* FdOs_h */
+diff --git a/src/FdThread.c b/src/FdThread.c
+index a18231e..76186d2 100644
+--- a/src/FdThread.c
++++ b/src/FdThread.c
+@@ -7,6 +7,7 @@
+ #include "FdIO.h"
+ #include <sys/types.h>
+ #include <sys/syscall.h> 
++#include "FdOs.h"
+ 
+ typedef struct FdThread  FdThread;
+ 
+@@ -19,7 +20,7 @@ struct FdThread {
+   int          indexOut;    /* index for the next frame to read        */
+   double       maxWaitTime; /* maximum waiting time to feed the thread */
+   pthread_t    thrdId;      /* thread info                             */
+-  sem_t        semNewData;  /* tell is new data should be processed    */
++  CfgSem_t     semNewData;  /* tell is new data should be processed    */
+   pthread_mutex_t lock;     /* mutex to control the frame passing      */
+   FdAction    *action;      /* FdAction object                         */
+ };
+@@ -32,8 +33,6 @@ int FdThreadNew(void *arg, CfgDataType_t *dataType)
+ /*-----------------------------------------------------------------------------*/
+ {
+   FdThread *thrd;
+-  pthread_t myId;
+-  cpu_set_t cpuset;
+   int irc;
+ 
+   /*----------make sure there is at an FdOCm server before the first thread---*/
+@@ -60,17 +59,14 @@ int FdThreadNew(void *arg, CfgDataType_t *dataType)
+   thrd->indexOut = 0;
+ 
+   /*---------------------------------------------------initialize semaphore---*/
+-  sem_init(&thrd->semNewData,  0, 0);
++  CfgSemInit(&thrd->semNewData, 0);
+ 
+  /*-----------------------------------------------------------create thread---*/
+   irc = pthread_create(&(thrd->thrdId), NULL, (void *(*)(void *))FdThreadMain, 
+                        (void *)thrd);
+   if(irc == -1) CfgMsgAddFatal("FdThreadMain creation failed");
+ 
+-  /*------------put the thread on the same CPU to avoid cache inefficiency---*/
+-  myId = pthread_self();   /*----------get thread id for the main---*/
+-  pthread_getaffinity_np(myId,         sizeof(cpu_set_t), &cpuset);
+-  pthread_setaffinity_np(thrd->thrdId, sizeof(cpu_set_t), &cpuset);
++  FdThreadCopyAffinity(thrd->thrdId);
+ 
+   return(CFG_OK);
+ }
+@@ -102,14 +98,14 @@ void FdThreadProcess(FdThread *thrd,
+   /*-------------------------------------------put frame in the thread list---*/
+   if(thrd->action->debugLvl > 0) {
+     int sval = 0;
+-    sem_getvalue(&thrd->semNewData, &sval);
++    sem_getvalue(CfgSemPtr(&thrd->semNewData), &sval);
+     CfgMsgAddInfo(
+ 	"FdThreadProcess: put frame %d in slot %d svalue=%d" ,
+ 	frame->GTimeS, thrd->indexIn, sval);}
+   thrd->frames[thrd->indexIn] = frame;
+   thrd->indexIn = (thrd->indexIn+1)%thrd->nFrames;
+ 
+-  sem_post(&thrd->semNewData);  /*------------------wake up the next thread----*/
++  sem_post(CfgSemPtr(&thrd->semNewData));  /*------------------wake up the next thread----*/
+ 
+   /*------------------------------------if frame=NULL, this is the last call---*/
+ /*  FdIO *fdIO = FdIOGetRoot();
+@@ -130,7 +126,7 @@ void FdThreadMain(FdThread *thrd)
+   clockid_t threadClockId;
+ 
+   FdIO *fdIO = FdIOGetRoot(); 
+-  int tid = syscall(__NR_gettid);
++  int tid = FdGetTid();
+                                    
+   CfgMsgAddInfo("Start Fd thread %s; tid=%d pid=%d", thrd->name, tid, getpid());
+ 
+@@ -142,7 +138,7 @@ void FdThreadMain(FdThread *thrd)
+   while (1) {
+ 
+     /*----------------------------------------------wait for the next frame---*/
+-    sem_wait(&thrd->semNewData);
++    sem_wait(CfgSemPtr(&thrd->semNewData));
+ 
+     /*-----------------------extract the frame from the list and process it---*/
+     pthread_mutex_lock (&thrd->lock);
+@@ -150,7 +146,7 @@ void FdThreadMain(FdThread *thrd)
+     thrd->frames[thrd->indexOut] = NULL;
+     if(thrd->action->debugLvl > 0 && frame != NULL) {
+       int sval = 0;
+-      sem_getvalue(&thrd->semNewData, &sval);
++      sem_getvalue(CfgSemPtr(&thrd->semNewData), &sval);
+       CfgMsgAddInfo(
+        "FdThreadMain:    get frame %d    from %d sval=%d",frame->GTimeS, thrd->indexOut, sval);}
+     thrd->indexOut = (thrd->indexOut+1)%thrd->nFrames;
+@@ -163,7 +159,7 @@ void FdThreadMain(FdThread *thrd)
+   }
+ 
+   /*-------------------------------- Get thread clock Id and then clock time---*/
+-  pthread_getcpuclockid(thrd->thrdId, &threadClockId);
++  FdThreadCpuClock(thrd->thrdId, &threadClockId);
+   clock_gettime(threadClockId, &currTime);
+ 
+   CfgMsgAddInfo("Fd thread %s ended; CPU: %g s",thrd->name,

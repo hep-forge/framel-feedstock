@@ -1,21 +1,24 @@
 {% set versions = {
     "8.50.3": "f9ae4d6affc43835236abf7c794ae4d6f48ecd5b61db7d5d622d235a8e1ad2bf"
 } %}
+{% set frv_version = "4.41.6" %}
+{% set frv_sha256 = "c5a4aebfaf7f2fa89b0b2e1e0372823704826e391d2ffaebdb182c183695cd3b" %}
+{% set fd_version = "8.65.3" %}
+{% set fd_sha256 = "42d865114da21f8d2d9c4f4d48402ddbf0e05db51d237e363e4df6fe8e9873c5" %}
 
 {% set version = environ.get('COMMIT_VERSION', None) %}
 {% set version = version or versions.keys()|first %}
 {% set version = version|string %}
 
-# "framel" here is the Virgo frame stack in one install:
-#   libframel, python-framel     the Frame Library and its Python module
-#   frv, fd                      Virgo's Frv (signal processing on frames)
-#                                and Fd (frame distribution), linux-64 only
-#                                because conda-forge builds them only there
-#   FrDump, FrCopy, ... tools    compiled here
-# The library and the Virgo packages are conda-forge's; only the Fr tools
-# are built, against conda-forge's libframel of the same version. That is
-# what conda-forge's own "framel" package holds, which this one shadows
-# under strict channel priority (same name), so it must provide them.
+# "framel" here is the whole Virgo frame stack in one package, built from
+# source, nothing taken from conda-forge's Virgo packages:
+#   Fr   the Frame Library, its tools (FrDump, FrCopy, ...) and its Python
+#        module (import framel)
+#   Frv  signal processing on frame vectors
+#   Fd   frame distribution, on hep-forge's cm and cfg
+# The package version is Fr's; Frv and Fd versions are set above.
+# conda-forge splits the same files over libframel, python-framel, frv and
+# fd: run_constrained keeps those out, so they cannot overwrite these files.
 # Plain "#" comments only: the publish workflow's version trimming strips
 # {% %}/{{ }} and yaml-loads the rest, so a Jinja comment block breaks it.
 
@@ -24,53 +27,93 @@ package:
   version: {{ environ.get('ANACONDA_VERSION', version)|replace("-", ".") }}
 
 source:
-  url: "https://git.ligo.org/virgo/virgoapp/Fr/-/archive/{{ version }}/Fr-{{ version }}.tar.gz"
-  {% if versions.get(version, None) %}
-  sha256: {{ versions.get(version) }}
-  {% endif %}
+  - url: "https://git.ligo.org/virgo/virgoapp/Fr/-/archive/{{ version }}/Fr-{{ version }}.tar.gz"
+    {% if versions.get(version, None) %}
+    sha256: {{ versions.get(version) }}
+    {% endif %}
+    folder: fr
+  - url: "https://git.ligo.org/virgo/virgoapp/Frv/-/archive/{{ frv_version }}/Frv-{{ frv_version }}.tar.gz"
+    sha256: {{ frv_sha256 }}
+    folder: frv
+    patches:
+      # conda-forge's: no spaces in the pkg-config module list given to CMake
+      - patches/frv-pkg-config-requirements.patch
+  - url: "https://git.ligo.org/virgo/virgoapp/Fd/-/archive/{{ fd_version }}/Fd-{{ fd_version }}.tar.gz"
+    sha256: {{ fd_sha256 }}
+    folder: fd
+    patches:
+      # macOS port, Linux build unchanged (see the patch's FdOs.h)
+      - patches/fd-macos.patch
 
 build:
-  number: 1   # above the 8.50.3 build 0 that compiled its own libframel
+  number: 2   # builds 0-1 took the library and Frv/Fd from conda-forge
+  skip: true  # [win]
+  # the .pyc conda-build writes are for its own Python, not the package's
+  skip_compile_pyc:
+    - "*.py"
+  run_exports:
+    - {{ pin_subpackage("framel", max_pin="x") }}
 
 requirements:
   build:
     - {{ compiler('c') }}
     - {{ stdlib('c') }}
+    - cmake
+    - make
+    - meson
+    - ninja
+    - pkg-config
+    - ctypesgen
   host:
-    - libframel {{ version }}.*
+    - python
+    - fftw
+    - cm
+    - cfg
   run:
-    - libframel {{ version }}.*
-    - python-framel {{ version }}.*
-    - frv   # [linux64]
-    - fd    # [linux64]
+    - python
+    - numpy
+  run_constrained:
+    - libframel <0
+    - python-framel <0
+    - frv <0
+    - fd <0
 
 test:
   source_files:
-    - data/test.gwf
-  commands:
-    {% for app in ["FrChannels", "FrCheck", "FrCopy", "FrDiff", "FrDump", "FrTrend", "FrameDataDump"] %}
-    - test -x "${PREFIX}/bin/{{ app }}"
-    {% endfor %}
-    - FrCheck -i data/test.gwf
-    - FrDump -i data/test.gwf -d 1
-    - pkg-config --exact-version "{{ version }}" framel
-    - python -c "import framel"
-    - test -f "${PREFIX}/include/frv/Frv.h"   # [linux64]
-    - test -f "${PREFIX}/include/fd/Fd.h"     # [linux64]
+    - fr/data/test.gwf
   requires:
     - pkg-config
+  imports:
+    - framel
+  commands:
+    {% for app in ["FrChannels", "FrCheck", "FrCopy", "FrDiff", "FrDump", "FrTrend", "FrameDataDump",
+                   "FdGetChannelsList", "FdIOServer", "FdMoni", "FdSend", "FdStat", "FdWrite"] %}
+    - test -x "${PREFIX}/bin/{{ app }}"
+    {% endfor %}
+    - FrCheck -i fr/data/test.gwf
+    - FrDump -i fr/data/test.gwf -d 1
+    - pkg-config --print-errors --exact-version "{{ version }}" framel
+    - pkg-config --print-errors --exact-version "{{ frv_version }}" frv
+    - pkg-config --print-errors --exact-version "{{ fd_version }}" fd
+    - test -f "${PREFIX}/include/FrameL.h"
+    - test -f "${PREFIX}/include/frv/Frv.h"
+    - test -f "${PREFIX}/include/fd/Fd.h"
+    - python -c "import framel; print(framel.frgetvect1d('fr/data/test.gwf', 'D1')[0][:3])"
 
 about:
   home: "https://git.ligo.org/virgo/virgoapp/Fr"
+  dev_url: "https://git.ligo.org/virgo/virgoapp"
   license: "LGPL-2.1-or-later"
-  summary: "Virgo Frame Library with its tools, Python module, Frv and Fd"
+  license_file:
+    - fr/LICENSE
+    - frv/COPYING
+    - fd/LICENSE
+  summary: "Virgo frame stack: Frame Library with tools and Python, Frv and Fd"
   description: |
     The Frame Library (FrameL) for the gravitational-wave frame format,
-    with its command-line tools (FrDump, FrCopy, FrCheck, ...), its Python
-    module, and Virgo's Frv and Fd (linux-64). The library and the Virgo
-    packages come from conda-forge (libframel, python-framel, frv, fd);
-    the tools are compiled here against that libframel.
-  dev_url: "https://git.ligo.org/virgo/virgoapp"
+    with its command-line tools and Python module, plus Virgo's Frv
+    (frame vector signal processing) and Fd (frame distribution), all
+    built from source in one package. Fd runs on hep-forge's cm and cfg.
 
 extra:
   recipe-maintainers:

@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
 set -euxo pipefail
 
-# Only the Fr command-line tools: the library itself is conda-forge's
-# libframel of the same version (in host), so link them against that
-# instead of building a second libframel. Same tool list as Fr's
-# src/CMakeLists.txt. -std=gnu17: the Fr sources predate C23, where "()"
-# in a declarator means "no arguments".
-mkdir -p "${PREFIX}/bin"
-for app in FrChannels FrCheck FrCopy FrDiff FrDump FrTrend FrameDataDump; do
-    ${CC} ${CFLAGS} -std=gnu17 ${CPPFLAGS} -I"${PREFIX}/include" \
-        "src/${app}.c" -o "${PREFIX}/bin/${app}" \
-        ${LDFLAGS} -L"${PREFIX}/lib" -lframel -lm
-done
+# --- Fr: library, tools, docs and the Python module (ctypes binding)
+cmake -S fr -B build-fr ${CMAKE_ARGS} \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DENABLE_C=yes -DENABLE_PYTHON=yes -DENABLE_MATLAB=no -DENABLE_PACKAGING=no \
+  -DPython3_EXECUTABLE="${PYTHON}"
+cmake --build build-fr --parallel "${CPU_COUNT}" --verbose
+cmake --install build-fr
 
-# the format and library documentation, as Fr's own install puts it
-mkdir -p "${PREFIX}/share/doc/framel"
-cp doc/*.pdf "${PREFIX}/share/doc/framel/"
+# --- Frv, against the Fr just installed
+cmake -S frv -B build-frv -G Ninja ${CMAKE_ARGS} \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_LIBDIR=lib
+cmake --build build-frv --parallel "${CPU_COUNT}" --verbose
+cmake --install build-frv
+
+# --- Fd, against Fr, Frv and hep-forge's cfg/cm
+# MESON_ARGS (conda-build) already sets the prefix, libdir and buildtype
+meson setup build-fd fd ${MESON_ARGS} --wrap-mode=nofallback --backend=ninja
+ninja -C build-fd -j"${CPU_COUNT}" -v
+ninja -C build-fd install

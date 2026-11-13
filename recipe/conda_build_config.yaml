@@ -10,3 +10,7 @@ c_stdlib_version:
 # and linux-aarch64. A floor, not a ceiling.
 c_compiler_version:    # [linux]
   - 14                       # [linux]
+
+# one Python for the bindings (ctypes, installed into that site-packages)
+python:
+  - "3.12"
